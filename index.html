@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taut String — plucked waveguide instrument</title>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1>Taut String</h1>
+      <p>Single-delay-loop waveguide · plucked excitation</p>
+    </div>
+  </div>
+  <div class="topbar-status">
+    <span class="chip" id="chipAudio"><i data-dot></i><span data-text>Audio off</span></span>
+    <span class="chip" id="chipRate"><span data-text>— Hz</span></span>
+    <span class="chip" id="chipPitch"><span data-text>—</span></span>
+  </div>
+  <div class="topbar-actions">
+    <button id="startAudio" class="btn primary">Start audio</button>
+    <button id="release" class="btn" disabled>Damp</button>
+    <button id="resetModel" class="btn" disabled>Reset</button>
+  </div>
+</header>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<main>
+  <section class="stage" aria-label="Instrument and results">
+    <div class="panel string-panel">
+      <div class="panel-head">
+        <h2>String</h2>
+        <div class="seg" role="group" aria-label="Excitation type">
+          <button class="segbtn active" data-excitation="pluck">Pluck</button>
+          <button class="segbtn" data-excitation="burst">Noise burst</button>
+        </div>
+      </div>
+      <canvas id="stringCanvas" aria-label="String you can drag to pluck"></canvas>
+      <div class="string-foot">
+        <div class="string-facts">
+          <span><b id="factLength">0.640</b> m</span>
+          <span><b id="factPitch">A3</b> · <b id="factHz">220.0</b> Hz</span>
+          <span>Pluck at <b id="factPluck">18%</b> · Pickup at <b id="factPickup">52%</b></span>
+        </div>
+        <button id="pluckBtn" class="btn accent" disabled>Pluck <kbd>Space</kbd></button>
+      </div>
+      <div class="hint">Drag the string down and release to pluck at that point. Depth sets force.</div>
+    </div>
+
+    <div class="panel results-panel">
+      <div class="panel-head">
+        <h2>Vibration &amp; output</h2>
+        <span class="chip" id="chipModel"><i data-dot></i><span data-text>Idle</span></span>
+      </div>
+      <canvas id="decayCanvas" aria-label="Decay envelope in decibels over time"></canvas>
+      <div class="metrics" id="metrics">
+        <div class="metric"><label>Measured f0</label><b id="mPitch">—</b><small id="mPitchErr">—</small></div>
+        <div class="metric"><label>Predicted T60</label><b id="mPredT60">—</b><small>at f0</small></div>
+        <div class="metric"><label>Loop gain g</label><b id="mGain">—</b><small id="mMargin">—</small></div>
+        <div class="metric"><label>Peak output</label><b id="mPeak">—</b><small id="mClip">—</small></div>
+      </div>
+      <div class="partials">
+        <div class="partials-head">
+          <h3>Partial amplitudes</h3>
+          <span class="legend"><i class="sw measured"></i>rendered <i class="sw predicted"></i>comb model</span>
+        </div>
+        <canvas id="partialCanvas" aria-label="Partial amplitudes versus harmonic number"></canvas>
+        <p class="note">Measured from the first 40 ms of the live render; predicted from |sin(kπβ)·sin(kπγ)|.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel controls" aria-label="Performance controls">
+    <div class="panel-head">
+      <h2>Performance controls</h2>
+      <button id="resetDefaults" class="btn ghost small">Defaults</button>
+    </div>
+    <div class="control-grid">
+      <div class="control">
+        <div class="control-label"><label for="length">String length</label><output id="lengthOut">0.640 m</output></div>
+        <input id="length" type="range" min="0.14" max="1.80" step="0.0001" value="0.64">
+        <div class="scale"><span>0.14 m · 1006 Hz</span><span>1.80 m · 78 Hz</span></div>
+      </div>
+      <div class="control">
+        <div class="control-label"><label for="t60">Decay T60</label><output id="t60Out">3.0 s</output></div>
+        <input id="t60" type="range" min="0.2" max="12" step="0.1" value="3">
+        <div class="scale"><span>0.2 s</span><span>12 s</span></div>
+      </div>
+      <div class="control">
+        <div class="control-label"><label for="damping">Loss / damping λ</label><output id="dampingOut">auto</output></div>
+        <input id="damping" type="range" min="0" max="0.45" step="0.005" value="0.088">
+        <div class="scale"><span>bright</span><span>dull</span></div>
+        <label class="check"><input id="dampingAuto" type="checkbox" checked> auto (pitch-dependent)</label>
+      </div>
+      <div class="control">
+        <div class="control-label"><label for="pluckPos">Pluck position β</label><output id="pluckPosOut">18%</output></div>
+        <input id="pluckPos" type="range" min="0.03" max="0.5" step="0.005" value="0.18">
+        <div class="scale"><span>bridge</span><span>centre</span></div>
+      </div>
+      <div class="control">
+        <div class="control-label"><label for="pickupPos">Pickup position γ</label><output id="pickupPosOut">52%</output></div>
+        <input id="pickupPos" type="range" min="0.03" max="0.97" step="0.005" value="0.52">
+        <div class="scale"><span>bridge</span><span>neck</span></div>
+      </div>
+      <div class="control">
+        <div class="control-label"><label for="master">Output level</label><output id="masterOut">0.60</output></div>
+        <input id="master" type="range" min="0" max="1.2" step="0.01" value="0.6">
+        <div class="scale"><span>silent</span><span>loud</span></div>
+      </div>
+    </div>
+    <div class="notes-row">
+      <span class="notes-label">Tune to</span>
+      <div class="notes" id="notes"></div>
+    </div>
+  </section>
+
+  <section class="panel observe" aria-label="Waveguide internal state">
+    <div class="panel-head">
+      <h2>Waveguide internals</h2>
+      <span class="chip" id="chipStability"><i data-dot></i><span data-text>stable</span></span>
+    </div>
+    <div class="observe-grid">
+      <div class="observe-scope">
+        <h3>Loop signals (per telemetry tick)</h3>
+        <canvas id="scopeCanvas" aria-label="Waveguide stage signals"></canvas>
+        <div class="scope-legend">
+          <span><i style="--c:var(--c-delay)"></i>delayed</span>
+          <span><i style="--c:var(--c-allpass)"></i>allpass</span>
+          <span><i style="--c:var(--c-loss)"></i>loss</span>
+          <span><i style="--c:var(--c-write)"></i>write</span>
+          <span><i style="--c:var(--c-out)"></i>pickup</span>
+        </div>
+      </div>
+      <div class="observe-table">
+        <h3>Tuned loop @ f0</h3>
+        <dl>
+          <div><dt>Target period</dt><dd id="oTarget">—</dd></div>
+          <div><dt>Integer delay N</dt><dd id="oNint">—</dd></div>
+          <div><dt>Allpass a</dt><dd id="oAp">—</dd></div>
+          <div><dt>Allpass delay</dt><dd id="oApDelay">—</dd></div>
+          <div><dt>Loss λ / phase</dt><dd id="oLoss">—</dd></div>
+          <div><dt>Total loop delay</dt><dd id="oTotal">—</dd></div>
+          <div><dt>Tuning error</dt><dd id="oTune">—</dd></div>
+          <div><dt>Loop gain</dt><dd id="oGain">—</dd></div>
+          <div><dt>Gain margin</dt><dd id="oMargin">—</dd></div>
+          <div><dt>Pred. T60 / 5th</dt><dd id="oT60s">—</dd></div>
+          <div><dt>Round trips</dt><dd id="oTrips">—</dd></div>
+          <div><dt>Internal peak</dt><dd id="oPeak">—</dd></div>
+        </dl>
+      </div>
+      <div class="observe-live">
+        <h3>Stage values (latest tick)</h3>
+        <dl>
+          <div><dt>s[n−N]</dt><dd id="vDelayed">—</dd></div>
+          <div><dt>A(s)</dt><dd id="vAllpass">—</dd></div>
+          <div><dt>L²(A)</dt><dd id="vLoss">—</dd></div>
+          <div><dt>g·L²</dt><dd id="vLooped">—</dd></div>
+          <div><dt>+ exc</dt><dd id="vWrite">—</dd></div>
+          <div><dt>pickup</dt><dd id="vOut">—</dd></div>
+        </dl>
+        <p class="note">Values sampled from the running DSP, not recomputed in the UI.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel reference" aria-label="Offline reference">
+    <div class="panel-head">
+      <h2>Offline reference</h2>
+      <span class="chip"><span data-text>same kernel, no realtime</span></span>
+    </div>
+    <div class="reference-body">
+      <div class="reference-controls">
+        <label class="inline">Duration
+          <select id="refSeconds">
+            <option value="3">3 s</option>
+            <option value="5" selected>5 s</option>
+            <option value="8">8 s</option>
+          </select>
+        </label>
+        <button id="renderOffline" class="btn" disabled>Render &amp; measure</button>
+        <a id="downloadWav" class="btn ghost small disabled" aria-disabled="true">Download WAV</a>
+        <span class="note" id="refStatus">Uses the current length, decay, λ, and positions.</span>
+      </div>
+      <div class="reference-report">
+        <table id="refTable">
+          <thead><tr><th>Metric</th><th>Measured</th><th>Expected</th></tr></thead>
+          <tbody>
+            <tr><td>f0</td><td id="refPitch">—</td><td id="refPitchTarget">—</td></tr>
+            <tr><td>Pitch error</td><td id="refPitchErr">—</td><td>&lt; 1 cent</td></tr>
+            <tr><td>T60</td><td id="refT60">—</td><td id="refT60Target">—</td></tr>
+            <tr><td>Peak</td><td id="refPeak">—</td><td>&lt; 1.0</td></tr>
+            <tr><td>Total energy</td><td id="refEnergy">—</td><td>—</td></tr>
+            <tr><td>Finite / monotone</td><td id="refFinite">—</td><td>yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="note scope-note">
+      Supported mechanisms: one lossy dispersive string, exact harmonic tuning,
+      frequency-dependent decay, pluck/pickup position modal nulls. Not modelled:
+      string coupling, body resonances, nonlinear tension, sympathetic strings.
+    </p>
+  </section>
+</main>
+
+<footer>
+  <span>Digital waveguide: delay line + first-order allpass + two one-zero loss stages, g &lt; 1.</span>
+  <span id="footerBuild">kernel v1</span>
+</footer>
+
+<script type="module" src="./src/ui/main.js"></script>
+</body>
+</html>

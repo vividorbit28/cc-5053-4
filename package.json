@@ -1,0 +1,20 @@
+{
+  "name": "taut-string",
+  "version": "1.0.0",
+  "description": "Playable plucked-string digital waveguide with a control panel and offline reference",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "serve": "node scripts/serve.js",
+    "test": "node test/model-tests.js",
+    "test:browser": "node test/browser-check.js",
+    "test:matrix": "node test/ui-matrix.js",
+    "test:all": "node test/model-tests.js && node test/browser-check.js && node test/ui-matrix.js",
+    "render": "node scripts/render-reference.js"
+  },
+  "keywords": ["digital-waveguide", "karplus-strong", "audio-worklet", "synthesis"],
+  "license": "ISC",
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}

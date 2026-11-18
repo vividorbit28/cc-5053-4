@@ -1,0 +1,117 @@
+{
+  "config": {
+    "sampleRate": 48000,
+    "frequency": 220,
+    "t60": 3,
+    "seconds": 4,
+    "amplitude": 0.6,
+    "pluckPosition": 0.18,
+    "pickupPosition": 0.52,
+    "excitation": "pluck"
+  },
+  "stringLength": 0.64,
+  "solved": {
+    "frequency": 220,
+    "targetDelaySamples": 218.1818181818182,
+    "integerDelay": 217,
+    "allpassCoefficient": -0.0024680569947755733,
+    "allpassPhaseDelay": 1.0049476377278665,
+    "lossPhaseDelayPerStage": 0.08843527204516446,
+    "lossLambda": 0.08844444444444444,
+    "totalDelaySamples": 218.1818181818182,
+    "tuningErrorCents": 0,
+    "loopGain": 0.9896544504508306,
+    "gainLimited": false
+  },
+  "measured": {
+    "f0": 220.0011132967854,
+    "pitchErrorCents": 0.008760783749886425,
+    "t60": 3.0000252033951895,
+    "t60Reliable": true,
+    "peak": 0.19279250502586365,
+    "finite": true,
+    "energyMonotone": true,
+    "totalEnergy": 265.74028744916086
+  },
+  "partials": [
+    {
+      "harmonic": 1,
+      "frequency": 220,
+      "measuredT60": 2.9999996233950244,
+      "predictedT60": 2.999999999999996,
+      "predictedAmplitude": 3.623099344153755
+    },
+    {
+      "harmonic": 2,
+      "frequency": 440,
+      "measuredT60": 2.943588083053717,
+      "predictedT60": 2.9435965891832496,
+      "predictedAmplitude": 0.19208147070126125
+    },
+    {
+      "harmonic": 3,
+      "frequency": 660,
+      "measuredT60": 2.854179047149044,
+      "predictedT60": 2.854185577744828,
+      "predictedAmplitude": 0.7336206130395307
+    },
+    {
+      "harmonic": 4,
+      "frequency": 880,
+      "measuredT60": 2.7377991990535135,
+      "predictedT60": 2.737811040180506,
+      "predictedAmplitude": 0.08113941878596606
+    },
+    {
+      "harmonic": 5,
+      "frequency": 1100,
+      "measuredT60": 2.6014912336132645,
+      "predictedT60": 2.6015106209170815,
+      "predictedAmplitude": 0.07964569814261156
+    },
+    {
+      "harmonic": 6,
+      "frequency": 1320,
+      "measuredT60": 2.4523687450187435,
+      "predictedT60": 2.4523950359960422,
+      "predictedAmplitude": 0.017229157909847363
+    },
+    {
+      "harmonic": 7,
+      "frequency": 1540,
+      "measuredT60": 2.2968988043019642,
+      "predictedT60": 2.296933732545084,
+      "predictedAmplitude": 0.09119939916070947
+    },
+    {
+      "harmonic": 8,
+      "frequency": 1760,
+      "measuredT60": 2.140481149551709,
+      "predictedT60": 2.1405245081339,
+      "predictedAmplitude": 0.0500953264801214
+    }
+  ],
+  "partialRatiosMeasured": [
+    1,
+    0.05912586590347685,
+    0.18325511296357913,
+    0.020826290434318457,
+    0.020191085419838307,
+    0.0064797301353300175,
+    0.014344368706764038,
+    0.006043042754126221
+  ],
+  "supportedMechanisms": [
+    "single lossy dispersive delay-loop string",
+    "exact harmonic tuning including fractional delay and loss-filter phase",
+    "frequency-dependent decay via two one-zero lowpass stages",
+    "pluck-position and pickup-position modal weighting"
+  ],
+  "notModelled": [
+    "string-to-string coupling",
+    "body resonances",
+    "nonlinear tension",
+    "sympathetic strings",
+    "spatial radiation"
+  ]
+}
