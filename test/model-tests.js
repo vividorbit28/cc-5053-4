@@ -18,8 +18,13 @@
  */
 
 import { StringModel, solveLoop, loopGainForT60, predictedT60ForFrequency, frequencyForStringLength, stringLengthForFrequency, modalWeight, ModelError, MAX_LOOP_GAIN } from '../src/core/string-model.js';
-import { refineFrequency, cents, measureDecay, measurePartialDecay, totalEnergy, blockEnergy, smoothEnvelope, peakOf } from '../src/core/analysis.js';
-import { renderAndAnalyse } from '../src/core/offline.js';
+import {
+  refineFrequency, cents, measureDecay, measurePartialDecay, totalEnergy, blockEnergy,
+  smoothEnvelope, peakOf, measureFundamentalPeriod, fitDecayLine, fitLineWithCI
+} from '../src/core/analysis.js';
+import { renderAndAnalyse, renderString, encodeWav } from '../src/core/offline.js';
+import { convertLambda, fitLambdaToProfile } from '../src/core/conversion.js';
+import { EXAMPLES, LEGACY_PRESETS } from '../examples/library.js';
 
 const results = [];
 let failed = 0;
@@ -346,6 +351,173 @@ console.log('\n== Excitation type ==');
   assert(nonzeroAfter500ms > energy.length * 0.3,
     'sound continues long after the excitation (' + excitationMs.toFixed(1) + ' ms) ends',
     nonzeroAfter500ms + ' blocks active');
+}
+
+/* ─── 11. Period measurement carries a real CI ───────────────────────── */
+
+console.log('\n== Measured period and confidence interval ==');
+{
+  const fs = 48000;
+  const ren = renderString({ sampleRate: fs, frequency: 220, t60: 3, seconds: 3, amplitude: 0.6 });
+  const m = measureFundamentalPeriod(ren.samples, 220, fs);
+  assert(m.status === 'measured', 'period is measured for a long tail', m.status + (m.reason ? ' — ' + m.reason : ''));
+  assert(near(m.period, fs / 220, 0.02), 'measured period matches the tuned period',
+    m.period.toFixed(4) + ' ± ' + m.periodCI.toFixed(5) + ' smp');
+  assert(Number.isFinite(m.periodCI) && m.periodCI >= 0, 'period has a finite 95% CI',
+    '± ' + m.periodCI.toExponential(2));
+  assert(m.fitEnd > m.fitStart && m.fitEnd - m.fitStart > 0.5,
+    'phase fit reports the tail segment it used',
+    m.fitStart.toFixed(2) + '–' + m.fitEnd.toFixed(2) + ' s');
+  assert(Array.isArray(m.points) && m.points.length >= 6,
+    'phase samples are retained for drawing the fit', m.points.length + ' points');
+  const off = measureFundamentalPeriod(ren.samples, 221, fs);
+  assert(Number.isFinite(off.period) && near(off.period, fs / 220, 0.05),
+    'period measurement does not lock to the nominal input', off.period.toFixed(4) + ' smp');
+}
+
+/* ─── 12. Short tails stay indeterminate, with a reason ──────────────── */
+
+console.log('\n== Indeterminate short-tail samples are retained ==');
+{
+  const fs = 48000;
+  const ren = renderString({ sampleRate: fs, frequency: 82.41, t60: 0.2, seconds: 0.5, amplitude: 0.35 });
+  const period = measureFundamentalPeriod(ren.samples, 82.41, fs);
+  const decay = measureDecay(ren.samples, 82.41, fs, { startSeconds: 0.08, expectedT60: 0.2 });
+  assert(period.status === 'indeterminate', 'short tail leaves the period indeterminate',
+    period.reason || 'no reason');
+  assert(typeof period.reason === 'string' && period.reason.length > 0,
+    'indeterminate period says why', period.reason);
+  assert(decay.status === 'indeterminate' && typeof decay.reason === 'string',
+    'short tail leaves the T60 indeterminate with a reason', decay.reason || '');
+  assert(!Number.isFinite(period.period) || period.status !== 'measured',
+    'no made-up period is emitted for an indeterminate sample');
+}
+
+/* ─── 13. The measurement itself, not the model, sets the period ─────── */
+
+console.log('\n== Loss phase moves the measured pitch ==');
+{
+  const fs = 48000;
+  const solved = solveLoop(220, fs, { lossLambda: 0.05 });
+  // Render the frozen loop with only λ changed: N and a stay put.
+  const model = new StringModel(fs);
+  model.configure({ frequency: 220, t60: 3, lossLambda: 0.05 });
+  model.solved = { ...solved, lossLambda: 0.40, lossPhase: solved.lossPhase };
+  model.line.length = solved.integerDelay;
+  model.pluck(0.6, 0.18);
+  const samples = new Float32Array(Math.round(3.5 * fs));
+  for (let i = 0; i < samples.length; i++) samples[i] = model.tick();
+  const m = measureFundamentalPeriod(samples, 220, fs);
+  const shift = 1200 * Math.log2(m.f0 / 220);
+  assert(m.status === 'measured', 'held-loop period is measurable', m.reason || m.status);
+  assert(shift < -1.5 && shift > -4.5,
+    'changing only λ moves the measured pitch by a few cents',
+    shift.toFixed(2) + ' cents');
+  const predicted = (solved.lossPhase - solveLoop(220, fs, { lossLambda: 0.40 }).lossPhase);
+  assert(Number.isFinite(predicted), 'loss phase difference is finite', predicted.toFixed(4) + ' smp');
+}
+
+/* ─── 14. CI arithmetic is sane ──────────────────────────────────────── */
+
+console.log('\n== Fits report intervals, not point guesses ==');
+{
+  const line = fitLineWithCI([
+    { t: 0, db: 0 }, { t: 1, db: -2 }, { t: 2, db: -4 }, { t: 3, db: -5.9 }
+  ]);
+  assert(line.status === 'measured' && near(line.slope, -2, 0.15),
+    'line fit recovers a known slope', line.slope.toFixed(3));
+  assert(Number.isFinite(line.slopeCI), 'line fit reports a slope CI', '± ' + line.slopeCI.toFixed(3));
+  const tooFew = fitLineWithCI([{ t: 0, db: 0 }, { t: 1, db: -2 }]);
+  assert(tooFew.status === 'indeterminate', 'two points are not a fit', tooFew.reason);
+  const flat = fitDecayLine([
+    { t: 0, db: 0 }, { t: 1, db: 0.1 }, { t: 2, db: 0 }, { t: 3, db: 0.05 }
+  ]);
+  assert(flat.status === 'indeterminate', 'a flat line does not become a T60', flat.reason);
+}
+
+/* ─── 15. Library targets are executable ─────────────────────────────── */
+
+console.log('\n== Example library is executable ==');
+{
+  assert(EXAMPLES.length >= 8, 'library carries the required cases', EXAMPLES.length + ' cases');
+  const pair1 = EXAMPLES.filter(e => e.pair === 'same-f0-different-decay');
+  const pair2 = EXAMPLES.filter(e => e.pair === 'matched-tail-different-pitch');
+  const rates = EXAMPLES.filter(e => e.pair === 'nominal-pitch-across-rates');
+  assert(pair1.length === 2, 'pair 1 has both members', pair1.map(e => e.id).join(', '));
+  assert(pair2.length === 2, 'pair 2 has both members', pair2.map(e => e.id).join(', '));
+  assert(rates.length === 2, 'two sample rates are represented', rates.map(e => e.config.sampleRate).join(', '));
+  assert(rates[0].config.frequency === rates[1].config.frequency,
+    'the rate pair renders the same nominal pitch');
+  const boundaries = rates.map(e => e.targets.boundaryDistance.value);
+  assert(Math.min(...boundaries) < 0.02 && Math.max(...boundaries) > 0.2,
+    'one rate sits near the integer-delay boundary and one does not',
+    boundaries.map(b => b.toFixed(4)).join(' / '));
+  const open = EXAMPLES.filter(e => e.targets.expectIndeterminate);
+  assert(open.length === 1, 'an insufficient-tail sample is kept in the library', open[0] && open[0].id);
+  for (const e of EXAMPLES) {
+    if (!e.targets.periodSamples) continue;
+    assert(Number.isFinite(e.targets.periodSamples.value) && e.targets.periodSamples.tolerance > 0,
+      e.id + ' records a measurable base period');
+  }
+  assert(LEGACY_PRESETS.length >= 1 && LEGACY_PRESETS.every(p => p.lossStages === 2),
+    'legacy presets declare the two-stage loop they came from');
+}
+
+/* ─── 16. Conversion keeps the recording, not the parameters ─────────── */
+
+console.log('\n== Legacy conversion is checked against the recording ==');
+{
+  const fs = 48000;
+  const conv = convertLambda(220, 0.08844444444444444, 2, fs);
+  assert(conv.lambda > 0.0884 * 1.5,
+    'single-stage λ must rise to match a two-stage decay profile',
+    conv.lambda.toFixed(4) + (conv.limited ? ' (capped)' : ''));
+  const saturating = convertLambda(880, 0.2058, 2, fs);
+  assert(saturating.limited, 'conversion reports when λ saturates at high pitch',
+    'λ ' + saturating.lambda.toFixed(3));
+
+  // Carry-over uses the stored λ under the current filter: it should NOT
+  // reproduce the recording.
+  const preset = LEGACY_PRESETS[0].config;
+  const carried = renderString({ ...preset, lossStages: 1 });
+  const recorded = renderString({ ...preset, lossStages: 2 });
+  const carried5 = measurePartialDecay(carried.samples, 220 * 5, fs, { startSeconds: 0.05, windowSeconds: 0.18 });
+  const recorded5 = measurePartialDecay(recorded.samples, 220 * 5, fs, { startSeconds: 0.05, windowSeconds: 0.18 });
+  assert(Math.abs(carried5.t60 / recorded5.t60 - 1) > 0.03,
+    'carrying the stored λ forward misses the recorded decay',
+    'recorded ' + recorded5.t60.toFixed(3) + ' s, carried ' + carried5.t60.toFixed(3) + ' s');
+
+  // Fit to the *measured* recorded profile, re-render, re-measure.
+  const profile = [1, 2, 4, 5].map(k => ({
+    k, t60: measurePartialDecay(recorded.samples, 220 * k, fs, { startSeconds: 0.05, windowSeconds: 0.18 }).t60
+  }));
+  const fitted = fitLambdaToProfile(220, fs, preset.t60, profile);
+  const converted = renderString({ ...preset, lossLambda: fitted.lambda, lossStages: 1 });
+  const converted5 = measurePartialDecay(converted.samples, 220 * 5, fs, { startSeconds: 0.05, windowSeconds: 0.18 });
+  assert(Math.abs(converted5.t60 / recorded5.t60 - 1) < 0.03,
+    'converted single-stage λ reproduces the recorded partial-5 decay',
+    'λ ' + fitted.lambda.toFixed(4) + ', ' + converted5.t60.toFixed(3) + ' vs ' + recorded5.t60.toFixed(3) + ' s');
+}
+
+/* ─── 17. WAV round trip does not bias the decay ─────────────────────── */
+
+console.log('\n== Retained recording round trip ==');
+{
+  const fs = 48000;
+  const ren = renderString({ sampleRate: fs, frequency: 220, t60: 3, seconds: 2, amplitude: 0.6 });
+  const wav = encodeWav(ren.samples, fs);
+  const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+  const count = (wav.byteLength - 44) / 2;
+  const decoded = new Float32Array(count);
+  for (let i = 0; i < count; i++) decoded[i] = view.getInt16(44 + i * 2, true) / 0x8000;
+  const before = measurePartialDecay(ren.samples, 220 * 5, fs, { startSeconds: 0.05, windowSeconds: 0.18 });
+  const after = measurePartialDecay(decoded, 220 * 5, fs, { startSeconds: 0.05, windowSeconds: 0.18 });
+  assert(Math.abs(after.t60 / before.t60 - 1) < 0.005,
+    '16-bit round trip preserves the measured decay',
+    before.t60.toFixed(4) + ' → ' + after.t60.toFixed(4) + ' s');
+  let clipped = false;
+  try { encodeWav(Float32Array.from([0, 1.5, -1]), 48000); } catch { clipped = true; }
+  assert(clipped, 'encodeWav refuses a clipping buffer instead of wrapping it');
 }
 
 /* ─── summary ────────────────────────────────────────────────────────── */

@@ -24,6 +24,7 @@ import {
 } from '../core/analysis.js';
 import { renderAndAnalyse, encodeWav } from '../core/offline.js';
 import { StringView, DecayView, PartialView, ScopeView } from './views.js';
+import { initLibrary } from './library.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -724,6 +725,42 @@ $('renderOffline').addEventListener('click', () => {
   }, 30);
 });
 
+/* ─────────────────────── preset maintenance apply ───────────────────── */
+
+/*
+ * Apply a converted v2 preset to the live panel.  The actionable number is
+ * the converted λ: the pitch control is set from the preset's frequency, and
+ * the loss slider is taken off auto so the converted value actually reaches
+ * the loop instead of being replaced by the auto curve.
+ */
+function applyConvertedPreset(applied, maintenance) {
+  if (!applied) return;
+  const length = stringLengthForFrequency(applied.frequency);
+  setSlider('length', Math.min(1.8, Math.max(0.14, length)));
+  setSlider('t60', applied.t60);
+  $('dampingAuto').checked = false;
+  setSlider('damping', applied.lambda);
+  setSlider('pluckPos', applied.pluckPosition);
+  setSlider('pickupPos', applied.pickupPosition);
+  updateControlLabels();
+  updatePositions();
+  onControlInput({ target: controls.length });
+  sendConfigure();
+  highlightNotePreset();
+
+  const carried = maintenance ? maintenance.convertedRelativeError : NaN;
+  const rateMismatch = state.started && applied.sampleRate &&
+    Math.abs(state.sampleRate - applied.sampleRate) > 1
+    ? ' · fitted at ' + (applied.sampleRate / 1000).toFixed(1) + ' kHz, live at ' +
+      (state.sampleRate / 1000).toFixed(1) + ' kHz'
+    : '';
+  toast('Applied ' + (maintenance ? maintenance.preset : 'preset') + ' with λ = ' +
+    applied.lambda.toFixed(4) + ' (converted to reproduce the recording' +
+    (Number.isFinite(carried) ? ', ' + (carried * 100).toFixed(1) + '% partial-5 error' : '') +
+    ')' + rateMismatch,
+    'good', 6000);
+}
+
 /* ───────────────────────────── boot ─────────────────────────────────── */
 
 function boot() {
@@ -780,3 +817,6 @@ function boot() {
 }
 
 boot();
+initLibrary({ applyPreset: applyConvertedPreset }).catch((err) => {
+  console.warn('example library unavailable:', err);
+});

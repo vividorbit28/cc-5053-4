@@ -171,6 +171,70 @@ check('offline T60 measured', /\d+\.\d+ s/.test(refT60), refT60);
 const wavHref = await page.getAttribute('#downloadWav', 'href');
 check('WAV available', !!wavHref && wavHref.startsWith('blob:'), wavHref ? wavHref.slice(0, 20) + '…' : '');
 
+// ── Example library ────────────────────────────────────────────────────
+await page.waitForFunction(() => window.__tautString.library, null, { timeout: 8000 }).catch(() => {});
+const library = await page.evaluate(() => {
+  const lib = window.__tautString.library;
+  if (!lib) return null;
+  const rows = [...document.querySelectorAll('#libraryBody tr')];
+  return {
+    chip: document.getElementById('libraryChip').textContent,
+    rows: rows.length,
+    indeterminate: document.querySelectorAll('#libraryBody tr.state-indeterminate').length,
+    pairs: document.querySelectorAll('#libraryPairs .pair-card').length,
+    visible: lib.visible(),
+    id: lib.data && lib.data.cases.map(c => c.id)
+  };
+});
+check('library loaded', !!library, library ? library.chip : 'none');
+check('library lists every case', !!library && library.rows === library.id.length,
+  library ? library.rows + ' rows' : 'n/a');
+check('library keeps the indeterminate case',
+  !!library && library.indeterminate >= 1 && library.visible.includes('short-tail-indeterminate'),
+  library ? library.indeterminate + ' indeterminate row(s)' : 'n/a');
+check('library reports broken v2 conventions',
+  !!library && /broken v2 conventions/.test(library.chip), library ? library.chip : '');
+
+await page.selectOption('#libraryFilter', 'indeterminate');
+await page.waitForTimeout(150);
+const filtered = await page.evaluate(() => window.__tautString.library.visible());
+check('library filter keeps indeterminate sample', filtered.length === 1 &&
+  filtered[0] === 'short-tail-indeterminate', filtered.join(', '));
+await page.selectOption('#libraryFilter', 'all');
+
+await page.click('#libraryPlotHost summary');
+await page.waitForTimeout(300);
+const painted = await page.evaluate(() => [...document.querySelectorAll('#libraryPlots canvas')]
+  .every(c => {
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
+    return false;
+  }));
+check('library plots draw beside the measurements', painted);
+
+// ── Preset maintenance ────────────────────────────────────────────────
+await page.click('#maintCompare');
+await page.waitForFunction(() => window.__tautString.maintenance, null, { timeout: 30000 }).catch(() => {});
+const maint = await page.evaluate(() => window.__tautString.maintenance);
+check('maintenance conversion ran', !!maint, maint ? maint.preset : 'none');
+check('converted λ differs from the stored λ',
+  !!maint && Math.abs(maint.convertedLambda - 0.08844) > 0.05,
+  maint ? 'λ ' + maint.convertedLambda : 'n/a');
+check('converted matches the recording, carried does not',
+  !!maint && maint.accepted && maint.carriedCaught,
+  maint ? 'carried ' + (maint.carriedRelativeError * 100).toFixed(1) + '% vs converted ' +
+    (maint.convertedRelativeError * 100).toFixed(1) + '%' : 'n/a');
+
+await page.click('#maintApply');
+await page.waitForTimeout(250);
+const maintApplied = await page.evaluate(() => ({
+  damping: Number(document.getElementById('damping').value),
+  auto: document.getElementById('dampingAuto').checked
+}));
+check('apply converted sets λ and leaves auto damping',
+  !maintApplied.auto && Math.abs(maintApplied.damping - maint.convertedLambda) < 0.002,
+  'λ ' + maintApplied.damping + (maintApplied.auto ? ' (auto still on)' : ''));
+
 // Screenshot for manual review.
 await page.screenshot({ path: 'test/screenshot.png', fullPage: true });
 

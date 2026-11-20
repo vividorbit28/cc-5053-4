@@ -65,8 +65,103 @@ export function windowedMagnitude(buffer, frequency, sampleRate, start = 0, leng
 }
 
 /*
+ * Two-sided 95% t-quantile.  Kept small on purpose: the fits in this module
+ * use at most ~40 points, and a lookup avoids pulling in a statistics library.
+ */
+const T95 = [
+  0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+  2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+  2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042
+];
+export function tCritical95(df) {
+  if (!(df >= 1)) return NaN;
+  if (df < T95.length) return T95[df];
+  return 1.96 + 2.4 / df; // good approximation past the table
+}
+
+/*
+ * Least-squares line fit with a 95% CI on the slope.  This is a *raw*
+ * regression: it knows nothing about whether the slope means a decay or a
+ * phase.  Callers that want a T60 use `fitDecayLine`, which adds the sign
+ * check and the seconds-of-tail check.
+ *
+ * A non-finite slope CI means "not enough usable points"; callers keep the
+ * sample but report it as indeterminate rather than inventing a number.
+ */
+export function fitLineWithCI(points) {
+  const n = points.length;
+  if (n < 3) {
+    return {
+      n, slope: NaN, slopeCI: NaN, intercept: NaN, r2: NaN,
+      status: 'indeterminate', reason: n + ' points (need >= 3)',
+      fitStart: null, fitEnd: null, covered: 0
+    };
+  }
+  let sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
+  for (const p of points) {
+    sx += p.t; sy += p.db; sxx += p.t * p.t; sxy += p.t * p.db; syy += p.db * p.db;
+  }
+  const sxxC = sxx - sx * sx / n;
+  const syyC = syy - sy * sy / n;
+  const sxyC = sxy - sx * sy / n;
+  const slope = sxxC === 0 ? 0 : sxyC / sxxC;
+  const intercept = (sy - slope * sx) / n;
+  let sse = 0;
+  for (const p of points) {
+    const e = p.db - (intercept + slope * p.t);
+    sse += e * e;
+  }
+  const df = n - 2;
+  const variance = df > 0 ? sse / df : NaN;
+  const slopeSE = sxxC > 0 ? Math.sqrt(variance / sxxC) : NaN;
+  const slopeCI = slopeSE * tCritical95(df);
+  const r2 = syyC > 0 ? 1 - sse / syyC : 1;
+  const covered = points[n - 1].t - points[0].t;
+  const usable = df >= 2 && Number.isFinite(slopeCI);
+  return {
+    n, slope, slopeCI, intercept, r2,
+    status: usable ? 'measured' : 'indeterminate',
+    reason: usable ? null
+      : !Number.isFinite(slopeCI) ? 'slope CI not finite'
+      : 'too few degrees of freedom',
+    fitStart: points[0].t,
+    fitEnd: points[n - 1].t,
+    covered
+  };
+}
+
+/* Decay interpretation of a line fit: slope must be negative, the fit must
+ * span more than 0.1 s, and the CI must be finite. */
+export function fitDecayLine(points) {
+  const fit = fitLineWithCI(points);
+  const t60 = fit.slope < 0 ? -60 / fit.slope : Infinity;
+  const t60CI = fit.slope < 0 && Number.isFinite(fit.slopeCI)
+    ? Math.abs(60 * fit.slopeCI / (fit.slope * fit.slope))
+    : NaN;
+  const measured = fit.status === 'measured' && Number.isFinite(t60) &&
+    Number.isFinite(t60CI) && fit.covered > 0.1;
+  // A failed fit's own reason (too few points, non-finite CI) is more useful
+  // than "no decay": reporting the slope sign for a 2-point line would claim
+  // a measurement that never happened.
+  const reason = fit.status !== 'measured' ? fit.reason
+    : !(fit.slope < 0) ? 'no decay (slope >= 0)'
+    : fit.covered <= 0.1 ? 'fit span only ' + fit.covered.toFixed(3) + ' s'
+    : !Number.isFinite(t60CI) ? 'slope CI not finite'
+    : null;
+  return {
+    ...fit,
+    t60,
+    t60CI,
+    status: measured ? 'measured' : 'indeterminate',
+    reason
+  };
+}
+
+/*
  * Decay time of one harmonic, measured with long Hann-windowed segments so
- * neighbouring partials cannot leak into the estimate.
+ * neighbouring partials cannot leak into the estimate.  The fit reports the
+ * exact segment it used and a 95% CI, so a short or noisy tail is visible as
+ * "indeterminate" instead of a confident-looking number.
  */
 export function measurePartialDecay(buffer, frequency, sampleRate, options = {}) {
   const { startSeconds = 0.05, windowSeconds = 0.18, floorDb = -45 } = options;
@@ -78,17 +173,29 @@ export function measurePartialDecay(buffer, frequency, sampleRate, options = {})
     if (!(mag > 0)) continue;
     points.push({ t: (pos + windowLength / 2) / sampleRate, db: 20 * Math.log10(mag) });
   }
-  if (points.length < 3) return { t60: NaN, reliable: false, points };
+  if (points.length < 3) {
+    return {
+      t60: NaN, t60CI: NaN, reliable: false, status: 'indeterminate',
+      reason: points.length + ' windows (need >= 3)', points,
+      fitStart: null, fitEnd: null, covered: 0
+    };
+  }
   const reference = points[0].db;
   const kept = points.filter(p => p.db > reference + floorDb);
-  if (kept.length < 3) return { t60: NaN, reliable: false, points };
-  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (const p of kept) { n++; sx += p.t; sy += p.db; sxx += p.t * p.t; sxy += p.t * p.db; }
-  const denom = n * sxx - sx * sx;
-  const slope = denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
-  const t60 = slope < 0 ? -60 / slope : Infinity;
-  const covered = kept[kept.length - 1].t - kept[0].t;
-  return { t60, reliable: covered > 0.1 && Number.isFinite(t60), points: kept, covered };
+  const fit = fitDecayLine(kept);
+  return {
+    t60: fit.t60,
+    t60CI: fit.t60CI,
+    reliable: fit.status === 'measured',
+    status: fit.status,
+    reason: fit.reason,
+    slopeDbPerSecond: fit.slope,
+    r2: fit.r2,
+    points: kept,
+    fitStart: fit.fitStart,
+    fitEnd: fit.fitEnd,
+    covered: fit.covered
+  };
 }
 
 export function rmsOf(buffer, start = 0, length = buffer.length - start) {
@@ -137,30 +244,37 @@ export function measureDecay(buffer, frequency, sampleRate, options = {}) {
     if (!(mag > 0)) continue;
     points.push({ t: (pos + windowLength / 2) / sampleRate, db: 20 * Math.log10(mag) });
   }
-  if (points.length < 2) return { t60: NaN, points, slopeDbPerSecond: NaN, reliable: false };
+  const empty = (reason) => ({
+    t60: NaN, t60CI: NaN, slopeDbPerSecond: NaN, points,
+    windowSeconds: windowLength / sampleRate,
+    coveredSeconds: points.length ? points[points.length - 1].t - points[0].t : 0,
+    fitStart: null, fitEnd: null,
+    reliable: false, status: 'indeterminate', reason
+  });
+  if (points.length < 2) return empty(points.length + ' windows (need >= 2)');
   const reference = points[0].db;
   const kept = points.filter(p => p.db > reference + floorDb);
-  if (kept.length < 2) return { t60: NaN, points, slopeDbPerSecond: NaN, reliable: false };
-  let n = 0;
-  let sx = 0;
-  let sy = 0;
-  let sxx = 0;
-  let sxy = 0;
-  for (const p of kept) {
-    n++; sx += p.t; sy += p.db; sxx += p.t * p.t; sxy += p.t * p.db;
-  }
-  const denom = n * sxx - sx * sx;
-  const slope = denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
-  const t60 = slope < 0 ? -60 / slope : Infinity;
-  const coveredSeconds = kept[kept.length - 1].t - kept[0].t;
+  if (kept.length < 2) return empty('only ' + kept.length + ' windows above the floor');
+  const fit = fitDecayLine(kept);
+  // Independent sanity bounds: an absurdly long or short T60 is a fit artefact,
+  // not a measurement, even when the slope CI happens to be finite.
+  const plausible = Number.isFinite(fit.t60) && fit.t60 >= 0.15 && fit.t60 <= 30;
   return {
-    t60,
-    slopeDbPerSecond: slope,
+    t60: fit.t60,
+    t60CI: fit.t60CI,
+    slopeDbPerSecond: fit.slope,
+    r2: fit.r2,
     points: kept,
     windowSeconds: windowLength / sampleRate,
-    coveredSeconds,
-    reliable: kept.length >= 3 && coveredSeconds > Math.min(0.2, t60 * 0.3) &&
-      t60 > 0.15 && t60 < 30
+    coveredSeconds: fit.covered,
+    fitStart: fit.fitStart,
+    fitEnd: fit.fitEnd,
+    reliable: fit.status === 'measured' && plausible,
+    status: fit.status === 'measured' && plausible ? 'measured' : 'indeterminate',
+    reason: fit.status !== 'measured' ? fit.reason
+      : !plausible ? 'T60 ' + (Number.isFinite(fit.t60) ? fit.t60.toFixed(2) : '∞') +
+        ' s outside the reliable range [0.15, 30] s'
+      : null
   };
 }
 
@@ -263,4 +377,160 @@ export function peakFrequencyFromSpectrum(mags, sampleRate, fftSize) {
   const denom = y0 - 2 * y1 + y2;
   const delta = denom === 0 ? 0 : 0.5 * (y0 - y2) / denom;
   return (best + delta) * sampleRate / fftSize;
+}
+
+/*
+ * Measure the fundamental *period* from the audio, with a 95% CI in samples
+ * and in cents.
+ *
+ * Estimator: phase slope.  The signal is split into short Hann-windowed
+ * blocks; for each block the complex amplitude at the analysis frequency is
+ * computed by direct DFT, and the unwrapped phase is regressed against the
+ * block's absolute time.  A frequency offset Δf from the analysis frequency
+ * appears as a phase slope of 2πΔf, so the slope gives the residual and the
+ * regression residual scatter gives a genuine 95% CI on it.  This is a
+ * statistical interval on the audio, not a re-statement of the model's own
+ * solved delay.
+ *
+ * Returns the measured period, its CI, the equivalent f0 and cents error,
+ * the span of audio used for the phase fit, and a status.  A segment with too
+ * few usable blocks (a very short tail) is reported `indeterminate` and kept
+ * in the sample list rather than being given a made-up number.
+ */
+export function measureFundamentalPeriod(buffer, nominalFrequency, sampleRate, options = {}) {
+  const {
+    startSeconds = 0.08,
+    maxSeconds = 1.2
+  } = options;
+  const start = Math.max(0, Math.round(startSeconds * sampleRate));
+  const end = Math.min(buffer.length, start + Math.round(maxSeconds * sampleRate));
+  const nominalPeriod = sampleRate / nominalFrequency;
+
+  // Block length: at least ~6 periods so the analysis window isolates the
+  // fundamental from its neighbours, but small enough that a residual offset
+  // does not wrap past half a cycle between consecutive blocks.
+  const blockSeconds = Math.min(0.25, Math.max(6 * nominalPeriod / sampleRate, 0.006));
+  const blockLength = Math.max(256, Math.round(blockSeconds * sampleRate));
+  if (end - start < blockLength * 4) {
+    return emptyPeriodResult('segment shorter than four analysis blocks', start, end, sampleRate);
+  }
+
+  const w0 = 2 * Math.PI * nominalFrequency / sampleRate;
+  const cos0 = Math.cos(w0);
+  const sin0 = Math.sin(w0);
+  const points = [];
+  for (let from = start; from + blockLength <= end; from += blockLength) {
+    // Direct DFT at w0, phase referenced to the block's absolute start so the
+    // slope is the true frequency offset rather than an artefact of the hop.
+    let re = 0;
+    let im = 0;
+    let energy = 0;
+    for (let i = 0; i < blockLength; i++) {
+      const n = from + i;
+      // Rotate by w0·i into block-local phase, then add the block's absolute
+      // rotation once.  This keeps the trig argument small and exact enough.
+      const wr = Math.cos(w0 * i);
+      const wi = -Math.sin(w0 * i);
+      const window = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i + 1) / (blockLength + 1));
+      const x = buffer[n] * window;
+      re += x * wr;
+      im += x * wi;
+      energy += x * x;
+    }
+    const phaseAbs = Math.atan2(im, re) - w0 * from;
+    points.push({
+      t: (from + blockLength / 2) / sampleRate,
+      phase: phaseAbs,
+      mag: Math.hypot(re, im),
+      energy
+    });
+  }
+  if (points.length < 6) {
+    return emptyPeriodResult(points.length + ' analysis blocks (need >= 6)', start, end, sampleRate);
+  }
+
+  // Keep blocks whose fundamental is above the segment's noise floor; the
+  // phase of a decayed-to-nothing block is meaningless.  The threshold is
+  // relative to the loudest block so it adapts to the pluck amplitude.
+  const maxMag = Math.max(...points.map(p => p.mag));
+  const kept = points.filter(p => p.mag > maxMag * 1e-3);
+  if (kept.length < 6) {
+    return emptyPeriodResult('only ' + kept.length + ' blocks above the noise floor', start, end, sampleRate);
+  }
+
+  // Unwrap the phase along the kept sequence, then regress against time.
+  const unwrapped = [];
+  let carry = 0;
+  let previous = null;
+  for (const p of kept) {
+    let phase = p.phase + carry;
+    if (previous !== null) {
+      let delta = phase - previous;
+      delta -= 2 * Math.PI * Math.round(delta / (2 * Math.PI));
+      phase = previous + delta;
+    }
+    unwrapped.push({ t: p.t, phase });
+    previous = phase;
+  }
+  const fit = fitLineWithCI(unwrapped.map(u => ({ t: u.t, db: u.phase })));
+  if (fit.status !== 'measured' || !Number.isFinite(fit.slope)) {
+    return emptyPeriodResult(fit.reason || 'phase slope not measurable', start, end, sampleRate);
+  }
+  const deltaF = fit.slope / (2 * Math.PI);
+  const f0 = nominalFrequency + deltaF;
+  const slopeCI = fit.slopeCI / (2 * Math.PI); // Hz
+  if (!(f0 > 0) || !Number.isFinite(slopeCI)) {
+    return emptyPeriodResult('phase slope CI not finite', start, end, sampleRate);
+  }
+  const period = sampleRate / f0;
+  const periodCI = sampleRate * slopeCI / (f0 * f0);
+  const centsCI = 1200 * Math.log2((period + periodCI) / period);
+  const base = {
+    period, periodCI, f0, f0CI: slopeCI,
+    cents: 1200 * Math.log2(f0 / nominalFrequency),
+    centsCI,
+    blockCount: kept.length,
+    blockSeconds,
+    fitStart: fit.fitStart,
+    fitEnd: fit.fitEnd,
+    samplesUsed: end - start,
+    // The unwrapped phase samples and the line actually fitted to them.  The
+    // UI draws these beside the reported period so the number can be checked
+    // against the tail it came from.
+    points: unwrapped,
+    phaseSlope: fit.slope,
+    phaseSlopeCI: fit.slopeCI,
+    phaseIntercept: fit.intercept
+  };
+  // A slope CI that overlaps zero means the phase fit cannot separate the
+  // true frequency from the analysis frequency; keep the sample but say so.
+  if (slopeCI >= Math.abs(deltaF)) {
+    return {
+      ...base,
+      status: 'indeterminate',
+      reason: 'phase slope CI includes 0 (' + deltaF.toFixed(4) + ' ± ' + slopeCI.toFixed(4) + ' Hz)'
+    };
+  }
+  return {
+    ...base,
+    status: 'measured',
+    reason: null
+  };
+}
+
+function emptyPeriodResult(reason, start, end, sampleRate) {
+  return {
+    status: 'indeterminate',
+    reason,
+    period: NaN,
+    periodCI: NaN,
+    f0: NaN,
+    f0CI: NaN,
+    cents: NaN,
+    centsCI: NaN,
+    blockCount: 0,
+    fitStart: start / sampleRate,
+    fitEnd: end / sampleRate,
+    samplesUsed: Math.max(0, end - start)
+  };
 }

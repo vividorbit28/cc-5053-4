@@ -92,7 +92,7 @@
       </div>
       <div class="control">
         <div class="control-label"><label for="damping">Loss / damping λ</label><output id="dampingOut">auto</output></div>
-        <input id="damping" type="range" min="0" max="0.45" step="0.005" value="0.088">
+        <input id="damping" type="range" min="0" max="0.45" step="0.001" value="0.088">
         <div class="scale"><span>bright</span><span>dull</span></div>
         <label class="check"><input id="dampingAuto" type="checkbox" checked> auto (pitch-dependent)</label>
       </div>
@@ -147,7 +147,7 @@
           <div><dt>Tuning error</dt><dd id="oTune">—</dd></div>
           <div><dt>Loop gain</dt><dd id="oGain">—</dd></div>
           <div><dt>Gain margin</dt><dd id="oMargin">—</dd></div>
-          <div><dt>Pred. T60 / 5th</dt><dd id="oT60s">—</dd></div>
+          <div><dt>Pred. T60 / k=5</dt><dd id="oT60s">—</dd></div>
           <div><dt>Round trips</dt><dd id="oTrips">—</dd></div>
           <div><dt>Internal peak</dt><dd id="oPeak">—</dd></div>
         </dl>
@@ -157,14 +157,81 @@
         <dl>
           <div><dt>s[n−N]</dt><dd id="vDelayed">—</dd></div>
           <div><dt>A(s)</dt><dd id="vAllpass">—</dd></div>
-          <div><dt>L²(A)</dt><dd id="vLoss">—</dd></div>
-          <div><dt>g·L²</dt><dd id="vLooped">—</dd></div>
+          <div><dt>L(A)</dt><dd id="vLoss">—</dd></div>
+          <div><dt>g·L</dt><dd id="vLooped">—</dd></div>
           <div><dt>+ exc</dt><dd id="vWrite">—</dd></div>
           <div><dt>pickup</dt><dd id="vOut">—</dd></div>
         </dl>
         <p class="note">Values sampled from the running DSP, not recomputed in the UI.</p>
       </div>
     </div>
+  </section>
+
+  <section class="panel library" aria-label="Tuning example library">
+    <div class="panel-head">
+      <h2>Example library</h2>
+      <span class="chip" id="libraryChip"><span data-text>loading…</span></span>
+    </div>
+    <p class="note library-intro">
+      Every case carries its own measurable targets. A period is shown only when its
+      phase fit produced a finite 95% confidence interval; when the tail is too short
+      to fit, the case stays here marked <b>indeterminate</b> with the reason, rather
+      than being given a number.
+    </p>
+    <div class="library-pairs" id="libraryPairs"></div>
+    <div class="library-toolbar">
+      <label class="inline">Show
+        <select id="libraryFilter">
+          <option value="all">all cases</option>
+          <option value="pairs">the two pairs</option>
+          <option value="rate">sample-rate pair</option>
+          <option value="indeterminate">indeterminate only</option>
+        </select>
+      </label>
+      <span class="note" id="librarySummary">—</span>
+    </div>
+    <table class="library-table" id="libraryTable">
+      <thead>
+        <tr>
+          <th>Case</th>
+          <th>Base period (samples)</th>
+          <th>Measured f0</th>
+          <th>T60 (partials)</th>
+          <th>Fit span</th>
+          <th>State</th>
+        </tr>
+      </thead>
+      <tbody id="libraryBody"></tbody>
+    </table>
+    <details class="library-plot" id="libraryPlotHost">
+      <summary>Curves beside the measurement</summary>
+      <div class="plot-grid" id="libraryPlots"></div>
+    </details>
+  </section>
+
+  <section class="panel maintenance" aria-label="Preset maintenance">
+    <div class="panel-head">
+      <h2>Preset maintenance</h2>
+      <span class="chip" id="maintChip"><span data-text>v2 → current</span></span>
+    </div>
+    <p class="note">
+      Pick a saved preset to replace. The panel renders it two ways: the stored
+      parameters carried forward unchanged, and the same sound with λ converted to
+      the targets measured from the retained recording. It shows both against those
+      measurements, not against the preset's source numbers.
+    </p>
+    <div class="maint-row">
+      <label class="inline">Preset
+        <select id="maintPreset"></select>
+      </label>
+      <button id="maintCompare" class="btn" disabled>Render comparison</button>
+      <button id="maintApply" class="btn accent" disabled>Apply converted to panel</button>
+      <a id="maintWav" class="btn ghost small disabled" aria-disabled="true">Converted WAV</a>
+    </div>
+    <div class="maint-output" id="maintOutput">
+      <p class="note">Select a preset and render to compare.</p>
+    </div>
+    <div class="maint-recordings" id="maintRecordings"></div>
   </section>
 
   <section class="panel reference" aria-label="Offline reference">
@@ -208,7 +275,7 @@
 </main>
 
 <footer>
-  <span>Digital waveguide: delay line + first-order allpass + two one-zero loss stages, g &lt; 1.</span>
+  <span>Digital waveguide: delay line + first-order allpass + single one-zero loss stage, g &lt; 1.</span>
   <span id="footerBuild">kernel v1</span>
 </footer>
 

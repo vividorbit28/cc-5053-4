@@ -1,0 +1,139 @@
+{
+  "libraryVersion": 3,
+  "conventions": [
+    {
+      "claim": "Loss phase contributes twice to the tuned period",
+      "legacy": "2·phaseDelay(L, ω0)",
+      "current": "phaseDelay(L, ω0)",
+      "holds": false,
+      "evidence": "at 220 Hz the v2 loss phase is 0.1769 samples; the current filter contributes 0.2000"
+    },
+    {
+      "claim": "A given λ sets the same partial-5 / fundamental decay ratio",
+      "legacy": "L² with λ_old",
+      "current": "L with the same λ",
+      "holds": false,
+      "evidence": "stored λ=0.08844: recorded ratio 0.8672, carried ratio 0.9289"
+    },
+    {
+      "claim": "The auto damping curve keeps its timbre when carried forward",
+      "legacy": "0.06 + 0.16·t",
+      "current": "single-stage re-fit (0.200 at 220 Hz)",
+      "holds": true,
+      "evidence": "recorded ratio 0.8672, current auto ratio 0.8680"
+    },
+    {
+      "claim": "The solved integer delay N recorded under v2 is still correct",
+      "legacy": "N from L²",
+      "current": "N from L",
+      "holds": true,
+      "evidence": "at 220 Hz v2 N=217, v3 N=217"
+    },
+    {
+      "claim": "A v2 preset keeps its pitch when its stored N and allpass are carried forward",
+      "legacy": "stored N, a under L²",
+      "current": "same N, a under L",
+      "holds": false,
+      "evidence": "carried loop measures 0.70 cents (measured)"
+    },
+    {
+      "claim": "λ can always be raised enough to match the v2 decay profile",
+      "legacy": "λ_old ≤ 0.45",
+      "current": "λ_new ≤ 0.45",
+      "holds": false,
+      "evidence": "at 880 Hz the required λ is 0.450, capped at 0.45"
+    }
+  ],
+  "conversions": [
+    {
+      "preset": "legacy-a3-v2",
+      "label": "A3 (v2 loop, L²)",
+      "frequency": 220,
+      "sampleRate": 48000,
+      "legacyKernel": 2,
+      "legacyLossStages": 2,
+      "legacyLambda": 0.08844444444444444,
+      "convertedLambda": 0.202,
+      "conversionLimited": false,
+      "conversionFitError": 0.0000358704575264014,
+      "conversionTolerance": 0.03,
+      "referencePitchCents": -0.00006237523582842818,
+      "referencePitchStatus": "measured",
+      "convertedPitchCents": -0.0000623433389251696,
+      "partialT60": {
+        "1": {
+          "reference": 2.9999995079350423,
+          "naive": 2.9999999277312135,
+          "converted": 2.9999997654671238,
+          "referenceStatus": "measured"
+        },
+        "2": {
+          "reference": 2.9435771822370485,
+          "naive": 2.971512876220598,
+          "converted": 2.94358584699036,
+          "referenceStatus": "measured"
+        },
+        "4": {
+          "reference": 2.7377999997563256,
+          "naive": 2.8629087794659065,
+          "converted": 2.7377409617346693,
+          "referenceStatus": "measured"
+        },
+        "5": {
+          "reference": 2.601491273435368,
+          "naive": 2.7865806583674386,
+          "converted": 2.601305359702056,
+          "referenceStatus": "measured"
+        }
+      },
+      "naiveRelativeError": 0.07114741718416498,
+      "convertedRelativeError": 0.0000714642925041513,
+      "accepted": true
+    },
+    {
+      "preset": "legacy-g3-v2",
+      "label": "G3 196 Hz (v2 loop, L²)",
+      "frequency": 196,
+      "sampleRate": 48000,
+      "legacyKernel": 2,
+      "legacyLossStages": 2,
+      "legacyLambda": 0.08417777777777778,
+      "convertedLambda": 0.1905,
+      "conversionLimited": false,
+      "conversionFitError": 0.00005634250689183087,
+      "conversionTolerance": 0.03,
+      "referencePitchCents": -0.000039338358982426035,
+      "referencePitchStatus": "measured",
+      "convertedPitchCents": -0.000039340949721635597,
+      "partialT60": {
+        "1": {
+          "reference": 4.0000001261222335,
+          "naive": 4.0000002796698855,
+          "converted": 4.000000245564823,
+          "referenceStatus": "measured"
+        },
+        "2": {
+          "reference": 3.9320775673085286,
+          "naive": 3.9657413325319846,
+          "converted": 3.9320586179375043,
+          "referenceStatus": "measured"
+        },
+        "4": {
+          "reference": 3.682061379100191,
+          "naive": 3.8344646844172185,
+          "converted": 3.6818884914194405,
+          "referenceStatus": "measured"
+        },
+        "5": {
+          "reference": 3.5145742239773052,
+          "naive": 3.741616581658261,
+          "converted": 3.514227083107375,
+          "referenceStatus": "measured"
+        }
+      },
+      "naiveRelativeError": 0.06460024549546176,
+      "convertedRelativeError": 0.00009877181354195297,
+      "accepted": true
+    }
+  ]
+}

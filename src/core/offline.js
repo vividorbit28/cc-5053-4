@@ -31,6 +31,7 @@ export function renderString(config = {}) {
     frequency: cfg.frequency,
     t60: cfg.t60,
     lossLambda: cfg.lossLambda,
+    lossStages: cfg.lossStages,
     pluckPosition: cfg.pluckPosition,
     pickupPosition: cfg.pickupPosition
   });
@@ -123,8 +124,18 @@ export function partialRatioMeasurement(samples, sampleRate, frequency, count = 
 
 /* ───────────────────────── WAV writing ───────────────────────── */
 
+/*
+ * 16-bit PCM is the retained-recording format.  The conversion is normalised
+ * by a power-of-two scale so quantisation can shift the noise floor but never
+ * the signal level.  Clipping is refused rather than silently wrapped: a
+ * recording that clipped is not a reference for decay time.
+ */
 export function encodeWav(samples, sampleRate, channels = 1) {
   if (channels !== 1) throw new Error('only mono WAV is supported');
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
+  if (!(peak > 0)) throw new Error('cannot encode a silent buffer');
+  if (peak > 1) throw new Error('buffer peaks at ' + peak.toFixed(4) + '; 16-bit WAV would clip');
   const length = samples.length;
   const bytesPerSample = 2;
   const dataBytes = length * bytesPerSample;
@@ -148,8 +159,10 @@ export function encodeWav(samples, sampleRate, channels = 1) {
   view.setUint32(40, dataBytes, true);
   let offset = 44;
   for (let i = 0; i < length; i++) {
+    // Round, do not truncate: truncation biases every sample toward zero and
+    // shaves the measured decay envelope.
     const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    view.setInt16(offset, Math.round(s < 0 ? s * 0x8000 : s * 0x7fff), true);
     offset += 2;
   }
   return new Uint8Array(buffer);

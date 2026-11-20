@@ -104,7 +104,7 @@ const json = {
   supportedMechanisms: [
     'single lossy dispersive delay-loop string',
     'exact harmonic tuning including fractional delay and loss-filter phase',
-    'frequency-dependent decay via two one-zero lowpass stages',
+    'frequency-dependent decay via one one-zero lowpass stage',
     'pluck-position and pickup-position modal weighting'
   ],
   notModelled: [

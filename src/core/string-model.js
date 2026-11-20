@@ -6,15 +6,15 @@
  *   exc[n] ─► ( + ) ─► delay line (Nint samples) ─► allpass A(z)
  *              ▲                                        │
  *              │                                        ▼
- *              └──────────── g · L(z)^2 ◄──────── one-zero loss ×2
+ *              └──────────── g · L(z) ◄──────────── one-zero loss
  *
- *   H_loop(z) = g · A(z) · L(z)^2 · z^-Nint
+ *   H_loop(z) = g · A(z) · L(z) · z^-Nint
  *   A(z) = (a + z^-1) / (1 + a·z^-1)          first-order allpass
- *   L(z) = (1-λ) + λ·z^-1                     first-order lowpass, ×2
+ *   L(z) = (1-λ) + λ·z^-1                     first-order lowpass, ×1
  *
  * Tuning solves, at w0 = 2π f0/fs,
  *
- *   fs/f0 = Nint + phaseDelay(A, w0) + 2·phaseDelay(L, w0)
+ *   fs/f0 = Nint + phaseDelay(A, w0) + phaseDelay(L, w0)
  *
  * using bisection on the allpass coefficient (its phase delay is monotone in
  * a), so the sub-sample delay and the loss filter's own phase shift are both
@@ -58,6 +58,16 @@
  *   - no coupling between strings, no body resonance, no nonlinearity
  *   - T60 is only meaningful down to a few hundred ms; below that the
  *     excitation transient dominates and the measurement is flagged.
+ *
+ * ── Filter history ──────────────────────────────────────────────────────
+ *
+ *   Up to kernel v2 the loop carried L(z)² (two cascade stages, response
+ *   exponent 2).  A single stage is equally stable, but it changes BOTH the
+ *   loss phase the tuning equation subtracts and the partial-to-fundamental
+ *   decay ratio at a given λ.  Presets saved under v2 stay audible, but their
+ *   decay ratio and their f0 are no longer the values they were tuned for.
+ *   `LOSS_STAGES` names the current exponent; `src/core/conversion.js` fits a
+ *   single-stage λ to a retained recording of the old sound.
  */
 
 export const MAX_LOOP_GAIN = 0.9995;
@@ -65,6 +75,7 @@ export const MIN_FREQUENCY = 20;
 export const MAX_FREQUENCY_RATIO = 0.45; // of sample rate
 export const WAVE_SPEED = 281.6; // m/s, so 0.64 m of this string tunes to 220 Hz
 export const MAX_LOSS_LAMBDA = 0.45;
+export const LOSS_STAGES = 1; // response exponent of L(z) in the loop
 export const AP_MIN_COEFF = -0.98;
 export const AP_MAX_COEFF = 0.98;
 export const TWO_PI = Math.PI * 2;
@@ -132,7 +143,42 @@ export function lossMagnitude(lambda, w) {
   return Math.hypot(re, im);
 }
 
+/* Magnitude of L(z) raised to the loop's response exponent. */
+export function loopLossMagnitude(lambda, w, stages = LOSS_STAGES) {
+  return Math.pow(lossMagnitude(lambda, w), stages);
+}
+
+export function lossPhaseDelayTotal(lambda, w, stages = LOSS_STAGES) {
+  return stages * lossPhaseDelay(lambda, w);
+}
+
+/*
+ * The auto damping curve is a tuning curve, not a musical constant.  With a
+ * single loss stage a given λ removes less high-frequency energy than the old
+ * two-stage loop did, so the curve is re-fitted (to within ~1%) to preserve
+ * the partial-5 vs fundamental T60 ratio the old defaults produced.  Every
+ * number here was derived against LOSS_STAGES = 1; changing the stage count
+ * without re-deriving this curve silently retunes the "default" timbre.
+ */
 export function defaultLambda(frequency) {
+  if (!(Number.isFinite(frequency) && frequency > 0.01)) return LEGACY_DEFAULT_LAMBDA(220);
+  if (frequency <= 60) return Math.min(MAX_LOSS_LAMBDA, roundLambda(0.130));
+  if (frequency >= 960) return roundLambda(0.449);
+  // Three-segment fit to the single-stage equivalents of the v2 curve.
+  if (frequency <= 220) {
+    const t = Math.log(frequency / 60) / Math.log(220 / 60);
+    return roundLambda(0.130 + t * (0.200 - 0.130));
+  }
+  const t = Math.log(frequency / 220) / Math.log(960 / 220);
+  return roundLambda(0.200 + t * (0.449 - 0.200));
+}
+
+function roundLambda(v) {
+  return Number(v.toFixed(3));
+}
+
+/* The v2 auto curve, kept only so a v2 preset can be recognised as legacy. */
+export function LEGACY_DEFAULT_LAMBDA(frequency) {
   const t = clamp((frequency - 60) / 900, 0, 1);
   return 0.06 + 0.16 * t;
 }
@@ -173,10 +219,16 @@ export function solveLoop(frequency, sampleRate, options = {}) {
       { lambda, maximum: MAX_LOSS_LAMBDA }
     );
   }
+  // A caller may ask for the legacy cascade explicitly (used only to render
+  // the retained v2 reference sound); the live model always uses LOSS_STAGES.
+  const stages = options.lossStages === undefined ? LOSS_STAGES : Number(options.lossStages);
+  if (stages !== 1 && stages !== 2) {
+    throw new ModelError('Loss stage count must be 1 or 2', { stages });
+  }
 
   const targetDelay = sampleRate / frequency;
   const w = TWO_PI * frequency / sampleRate;
-  const lossPhase = 2 * lossPhaseDelay(lambda, w);
+  const lossPhase = lossPhaseDelayTotal(lambda, w, stages);
   const remaining = targetDelay - lossPhase;
   if (!(remaining > 2.2)) {
     throw new ModelError(
@@ -203,6 +255,15 @@ export function solveLoop(frequency, sampleRate, options = {}) {
   const allpass = solveAllpassCoefficient(desiredAllpassDelay, w);
   const allpassDelay = allpassPhaseDelay(allpass, w);
   const totalDelay = integerDelay + allpassDelay + lossPhase;
+  // Distance (in samples of `remaining`) to the nearest value at which the
+  // integer delay would step by one.  The floor branch steps at
+  // remaining = N + minAllpassDelay; the overflow branch steps at
+  // remaining = N + maxAllpassDelay.  Near zero means the fractional delay is
+  // doing essentially all of the tuning and the integer length is on a knife
+  // edge — exactly the situation a sample-rate change can tip over.
+  const lowerStep = integerDelay + minAllpassDelay;
+  const upperStep = integerDelay + Math.min(1 + minAllpassDelay, maxAllpassDelay);
+  const boundaryDistance = Math.min(remaining - lowerStep, upperStep - remaining);
   return {
     frequency,
     sampleRate,
@@ -210,11 +271,13 @@ export function solveLoop(frequency, sampleRate, options = {}) {
     targetDelay,
     integerDelay,
     lossLambda: lambda,
+    lossStages: stages,
     allpass,
     desiredAllpassDelay,
     allpassDelay,
     lossPhase,
     totalDelay,
+    boundaryDistance,
     tuningErrorCents: centsBetween(totalDelay, targetDelay)
   };
 }
@@ -248,22 +311,26 @@ export function solveAllpassCoefficient(desiredDelay, w) {
 
 /*
  * Loop gain for a target T60 at the fundamental.  Each round trip multiplies
- * the mode by g·|L(w)|²; after f·T60 round trips the amplitude is 1e-3.
+ * the mode by g·|L(w)|^stages; after f·T60 round trips the amplitude is 1e-3.
  */
 export function loopGainForT60(frequency, t60, lambda, options = {}) {
   const { sampleRate, limit = MAX_LOOP_GAIN } = options;
+  const stages = options.lossStages === undefined ? LOSS_STAGES : Number(options.lossStages);
   if (!(Number.isFinite(t60) && t60 > 0)) {
     throw new ModelError('T60 must be a positive number of seconds', { t60 });
   }
   if (!(Number.isFinite(frequency) && frequency > 0)) {
     throw new ModelError('Frequency must be positive', { frequency });
   }
+  if (!(Number.isFinite(sampleRate) && sampleRate > 0)) {
+    throw new ModelError('Sample rate must be positive', { sampleRate });
+  }
   const w = TWO_PI * frequency / sampleRate;
-  const lossMagSq = Math.pow(lossMagnitude(lambda, w), 2);
-  if (!(lossMagSq > 0)) {
+  const lossMagPerTrip = loopLossMagnitude(lambda, w, stages);
+  if (!(lossMagPerTrip > 0)) {
     throw new ModelError('Loss filter is fully closed; no energy can circulate', { lambda, frequency });
   }
-  const required = Math.pow(10, -3 / (t60 * frequency)) / lossMagSq;
+  const required = Math.pow(10, -3 / (t60 * frequency)) / lossMagPerTrip;
   const gain = Math.min(required, limit);
   if (!(gain > 0)) throw new ModelError('Loop gain computed as non-positive', { required, gain });
   return { gain, required, limited: required > limit, limit };
@@ -272,8 +339,8 @@ export function loopGainForT60(frequency, t60, lambda, options = {}) {
 /*
  * Decay time of the loop's response at `frequency`, given the tuned loop.
  *
- * Every partial gains the same factor g·|L(w)|² per round trip, and a round
- * trip takes 1/f0 seconds for all partials (a harmonic returns in phase
+ * Every partial gains the same factor g·|L(w)|^stages per round trip, and a
+ * round trip takes 1/f0 seconds for all partials (a harmonic returns in phase
  * after one period of the fundamental).  The decay rate therefore uses the
  * round-trip rate f0 — `solved.frequency` — not the partial's own frequency.
  * Using the partial frequency here is a common error that makes high-partial
@@ -281,7 +348,7 @@ export function loopGainForT60(frequency, t60, lambda, options = {}) {
  */
 export function predictedT60ForFrequency(frequency, solved, gain) {
   const w = TWO_PI * frequency / solved.sampleRate;
-  const loopMag = gain * Math.pow(lossMagnitude(solved.lossLambda, w), 2);
+  const loopMag = gain * loopLossMagnitude(solved.lossLambda, w, solved.lossStages ?? LOSS_STAGES);
   if (!(loopMag > 0)) return 0;
   if (loopMag >= 1) return Infinity;
   const tripsPerSecond = solved.frequency || frequency;
@@ -412,14 +479,17 @@ export class StringModel {
     this.silentSamples = 0;
   }
 
-  configure({ frequency, t60, lossLambda, pluckPosition, pickupPosition }) {
-    const solved = solveLoop(frequency, this.sampleRate, { lossLambda });
+  configure({ frequency, t60, lossLambda, lossStages, pluckPosition, pickupPosition }) {
+    const stages = lossStages === undefined ? LOSS_STAGES : lossStages;
+    const solved = solveLoop(frequency, this.sampleRate, { lossLambda, lossStages: stages });
     const gainInfo = loopGainForT60(frequency, t60, solved.lossLambda, {
-      sampleRate: this.sampleRate
+      sampleRate: this.sampleRate,
+      lossStages: stages
     });
     if (pluckPosition !== undefined) this.pluckPosition = clamp(pluckPosition, 0.02, 0.98);
     if (pickupPosition !== undefined) this.pickupPosition = clamp(pickupPosition, 0.02, 0.98);
     this.solved = solved;
+    this.lossStages = stages;
     this.gain = gainInfo.gain;
     this.gainLimited = gainInfo.limited;
     this.t60 = t60;
@@ -563,15 +633,19 @@ export class StringModel {
     this.allpassX1 = delayed;
     this.allpassY1 = allpassOut;
 
-    // 3. Frequency-dependent loss: two cascaded one-zero lowpass stages.
-    //    L(z) = (1-λ) + λ z^-1, exactly as used by the tuning solver.
+    // 3. Frequency-dependent loss: one one-zero lowpass stage (the legacy
+    //    v2 cascade is available only for rendering the retained reference
+    //    sound; the tuner and the live model both use LOSS_STAGES).
     const loss1 = (1 - s.lossLambda) * allpassOut + s.lossLambda * this.lossIn1;
     this.lossIn1 = allpassOut;
-    const loss2 = (1 - s.lossLambda) * loss1 + s.lossLambda * this.lossIn2;
-    this.lossIn2 = loss1;
+    let lossOut = loss1;
+    if (s.lossStages === 2) {
+      lossOut = (1 - s.lossLambda) * loss1 + s.lossLambda * this.lossIn2;
+      this.lossIn2 = loss1;
+    }
 
     // 4. Loop gain and summation with excitation.
-    const looped = this.gain * loss2;
+    const looped = this.gain * lossOut;
     let excitation = 0;
     if (this.excitation && this.exciteIndex < this.excitation.length) {
       excitation = this.excitation[this.exciteIndex++];
@@ -633,7 +707,7 @@ export class StringModel {
     this.observe.delayed = delayed;
     this.observe.allpassOut = allpassOut;
     this.observe.loss1 = loss1;
-    this.observe.loss2 = loss2;
+    this.observe.loss2 = lossOut;
     this.observe.looped = looped;
     this.observe.excitation = excitation;
     this.observe.write = write;
